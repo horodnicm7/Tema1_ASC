@@ -6,8 +6,84 @@ Assignment 1
 March 2019
 """
 
-from threading import Event, Thread, Lock, Semaphore, Condition
-from time import sleep
+from threading import Event, Thread, Condition, Lock
+from Queue import Queue
+
+
+class ThreadPool():
+    def __init__(self, num_threads):
+        self.__queue = Queue(num_threads)
+        self.__threads = []
+        self.__device = None
+
+        for x in range(num_threads):
+            self.__threads.append(Thread(target=self.run_thread))
+
+    @property
+    def queue(self):
+        return self.__queue
+
+    @property
+    def threads(self):
+        return self.__threads
+
+    @property
+    def device(self):
+        return self.__device
+
+    def set_device(self, device):
+        self.__device = device
+
+    def start_threads(self):
+        for thread in self.__threads:
+            thread.start()
+
+    def run_thread(self):
+        while True:
+            script, location, neighbours = self.__queue.get()
+
+            if not neighbours and not script:
+                self.__queue.task_done()
+                break
+
+            script_data = []
+            # collect data from current neighbours
+            for device in neighbours:
+                data = device.get_data(location)
+                if data is not None:
+                    script_data.append(data)
+
+            # add our data, if any
+            data = self.device.get_data(location)
+            if data is not None:
+                script_data.append(data)
+
+            if script_data != []:
+                # run script on data
+                result = script.run(script_data)
+
+                # update data of neighbours, hope no one is updating at the same time
+                for device in neighbours:
+                    device.set_data(location, result)
+                # update our data, hope no one is updating at the same time
+                self.device.set_data(location, result)
+
+            self.__queue.task_done()
+
+    def wait_threads(self):
+        self.__queue.join()
+
+    def add_task(self, script, location, neighbours):
+        self.__queue.put((script, location, neighbours))
+
+    def stop_threads(self):
+        self.__queue.join()
+
+        for thread in self.__threads:
+            self.__queue.put((None, None))
+
+        for thread in self.__threads:
+            thread.join()
 
 
 class ReusableBarrierCond():
@@ -18,27 +94,6 @@ class ReusableBarrierCond():
         self.count_threads = self.num_threads
         self.cond = Condition()  # blocheaza/deblocheaza thread-urile
         # protejeaza modificarea contorului
-
-    def wait(self):
-        self.cond.acquire()  # intra in regiunea critica
-        self.count_threads -= 1;
-        if self.count_threads == 0:
-            self.cond.notify_all()  # deblocheaza toate thread-urile
-            self.count_threads = self.num_threads
-        else:
-            self.cond.wait()  # blocheaza thread-ul eliberand in acelasi timp lock-ul
-        self.cond.release()  # iese din regiunea critica
-
-
-class DeviceBarrier():
-    def __init__(self):
-        self.num_threads = 0
-        self.count_threads = 0
-        self.cond = Condition()  # blocheaza/deblocheaza thread-urile
-
-    def add_thread(self):
-        self.num_threads += 1
-        self.count_threads += 1
 
     def wait(self):
         self.cond.acquire()  # intra in regiunea critica
@@ -55,9 +110,7 @@ class Device(object):
     """
     Class that represents a device.
     """
-    update_data = Lock()
-    wait_devs = DeviceBarrier()
-    thread_limit = 8
+    num_threads = 8
 
     def __init__(self, device_id, sensor_data, supervisor):
         """
@@ -76,28 +129,15 @@ class Device(object):
         self.sensor_data = sensor_data
         self.supervisor = supervisor
         self.script_received = Event()
+        self.script_received.clear()
         self.scripts = []
-        self.tmp = 0
         self.timepoint_done = Event()
-        Device.wait_devs.add_thread()
-        self.__start_threads()
-
-    def __start_threads(self):
-        self.nr_threads = self.thread_limit if len(self.sensor_data) > self.thread_limit\
-                            else len(self.sensor_data)
-        barrier = ReusableBarrierCond(self.nr_threads) #SimpleBarrier(self.nr_threads)
-        print("Number of threads: {0} for {1}".format(self.nr_threads, self))
-        print("{0} has {1}".format(self, self.sensor_data))
-        self.threads = []
-        for i in range(self.nr_threads):
-            self.threads.append(DeviceThread(self, i, barrier))
-
-        for thread in self.threads:
-            thread.start()
-
-    def __stop_threads(self):
-        for thread in self.threads:
-            thread.join()
+        self.thread = DeviceThread(self)
+        self.thread.start()
+        self.barrier = None
+        self.locks = dict()
+        for l in self.sensor_data:
+            self.locks[l] = Lock()
 
     def __str__(self):
         """
@@ -116,7 +156,11 @@ class Device(object):
         @param devices: list containing all devices
         """
         # we don't need no stinkin' setup
-        pass
+        if self.device_id == 0:
+            self.barrier = ReusableBarrierCond(len(devices))
+            for device in devices:
+                if device.device_id != 0:
+                    device.barrier = self.barrier
 
     def assign_script(self, script, location):
         """
@@ -131,11 +175,9 @@ class Device(object):
         """
         if script is not None:
             self.scripts.append((script, location))
-            self.script_received.clear()
-            self.timepoint_done.clear()
+            self.script_received.set()
         else:
             self.timepoint_done.set()
-            self.tmp += 1
 
     def get_data(self, location):
         """
@@ -147,7 +189,8 @@ class Device(object):
         @rtype: Float
         @return: the pollution value
         """
-        print("{0} returns {1} for location {2}".format(self, self.sensor_data[location], location))
+        if location in self.sensor_data:
+            self.locks[location].acquire()
         return self.sensor_data[location] if location in self.sensor_data else None
 
     def set_data(self, location, data):
@@ -160,10 +203,9 @@ class Device(object):
         @type data: Float
         @param data: the pollution value
         """
-        #self.update_data.set()
         if location in self.sensor_data:
+            self.locks[location].release()
             self.sensor_data[location] = data
-        #self.update_data.clear()
 
     def shutdown(self):
         """
@@ -171,81 +213,9 @@ class Device(object):
         is invoked by the tester. This method must block until all the threads
         started by this device terminate.
         """
-        #self.thread.join()
-        self.__stop_threads()
+        self.thread.join()
 
 
-class DeviceThread(Thread):
-    def __init__(self, device, th_id, tmp_barrier):
-        """
-        Constructor.
-
-        @type device: Device
-        @param device: the device which owns this thread
-        """
-        Thread.__init__(self, name="Device Thread %d" % device.device_id)
-        self.device = device
-        self.thread_id = th_id
-        self.tmp_barrier = tmp_barrier
-
-    def run(self):
-        while True:
-            #print("{0} {1}".format(self.device, self.thread_id))
-            # get the current neighbourhood
-            neighbours = self.device.supervisor.get_neighbours()
-            if neighbours is None:
-                break
-
-            #self.device.script_received.wait()
-            #print("{0} {1} passed script waiting".format(self.device, self.thread_id))
-            scripts = self.device.scripts
-
-            start, end = 0, 0
-            if self.device.nr_threads == len(scripts):
-                start, end = self.thread_id, self.thread_id + 1
-            if self.device.nr_threads > len(scripts):
-                start = self.thread_id
-                if self.thread_id + 1 > len(scripts):
-                    end = start - 1
-
-            if self.device.nr_threads < len(scripts):
-                per_th = len(scripts) / self.device.nr_threads
-                start, end = per_th * self.thread_id, per_th * (self.thread_id + 1)
-                if self.thread_id == self.device.nr_threads - 1:
-                    end = len(scripts)
-
-            # run scripts received until now
-            #for (script, location) in self.device.scripts:
-            for (script, location) in scripts[start: end]:
-                script_data = []
-                # collect data from current neighbours
-                for device in neighbours:
-                    data = device.get_data(location)
-                    if data is not None:
-                        script_data.append(data)
-                # add our data, if any
-                data = self.device.get_data(location)
-                if data is not None:
-                    script_data.append(data)
-
-                if script_data != []:
-                    # run script on data
-                    result = script.run(script_data)
-
-                    Device.update_data.acquire()
-                    # update data of neighbours, hope no one is updating at the same time
-                    for device in neighbours:
-                        device.set_data(location, result)
-                    # update our data, hope no one is updating at the same time
-                    self.device.set_data(location, result)
-                    Device.update_data.release()
-
-            #print("{0} {1} Waiting".format(self.device, self.thread_id))
-            #self.device.script_received.set()
-            self.tmp_barrier.wait()
-            self.device.wait_devs.wait()
-
-'''
 class DeviceThread(Thread):
     """
     Class that implements the device's worker thread.
@@ -260,6 +230,9 @@ class DeviceThread(Thread):
         """
         Thread.__init__(self, name="Device Thread %d" % device.device_id)
         self.device = device
+        self.pool = ThreadPool(Device.num_threads)
+        self.pool.set_device(device)
+        self.pool.start_threads()
 
     def run(self):
         # hope there is only one timepoint, as multiple iterations of the loop are not supported
@@ -269,35 +242,19 @@ class DeviceThread(Thread):
             if neighbours is None:
                 break
 
-            self.device.script_received.wait()
+            while True:
+                if self.device.script_received.is_set() or self.device.timepoint_done.is_set():
+                    if self.device.script_received.is_set():
+                        self.device.script_received.clear()
 
-            # run scripts received until now
-            for (script, location) in self.device.scripts:
-                script_data = []
-                # collect data from current neighbours
-                for device in neighbours:
-                    data = device.get_data(location)
-                    if data is not None:
-                        script_data.append(data)
-                # add our data, if any
-                data = self.device.get_data(location)
-                if data is not None:
-                    script_data.append(data)
+                        for script, location in self.device.scripts:
+                            self.pool.add_task(script, location, neighbours)
+                    else:
+                        self.device.timepoint_done.clear()
+                        self.device.script_received.set()
+                        break
 
-                if script_data != []:
-                    # run script on data
-                    result = script.run(script_data)
+            self.pool.wait_threads()
+            self.device.barrier.wait()
 
-                    self.device.update_data.acquire()
-                    print("Blocked like a cunt {0}".format(self))
-                    # update data of neighbours, hope no one is updating at the same time
-                    for device in neighbours:
-                        device.set_data(location, result)
-                    # update our data, hope no one is updating at the same time
-                    self.device.set_data(location, result)
-                    self.device.update_data.release()
-
-            # hope we don't get more than one script
-            print("{0} has timepoint {1}. Timepoint done {2}".format(self.device, self.device.tmp, self.device.timepoint_done.is_set()))
-            #self.device.timepoint_done.wait()
-            self.device.barrier.wait()'''
+        self.pool.stop_threads()

@@ -6,11 +6,15 @@ Assignment 1
 March 2019
 """
 
-from threading import Event, Thread, Condition, Lock
+from threading import Event, Thread, Condition
 from Queue import Queue
 
 
 class ThreadPool(object):
+    """
+        Class that implements a thread pool (a queue of tasks from
+        which every thread being in idle state, will take one)
+    """
     def __init__(self, num_threads, device):
         self.__device = device
         self.__queue = Queue(num_threads)
@@ -20,6 +24,15 @@ class ThreadPool(object):
             thread.start()
 
     def work(self):
+        """
+            While a finish command is not received, after the current thread
+            finishes a job, it will get another one from the queue. Then it will
+            get information about the current location, from every neighbour and
+            add it to a list, alongside its device information and run the script
+            (using the run method from Script class). The last step is to inform
+            all the neighbours with the current value and mark the current task
+            "as done"
+        """
         while True:
             script, location, neighbours = self.__queue.get()
 
@@ -55,12 +68,24 @@ class ThreadPool(object):
             self.__queue.task_done()
 
     def add_task(self, script, location, neighbours):
+        """
+            Add task to be done.
+        :param script: the script to be executed
+        :param location: current device's location
+        :param neighbours: device's neighbours
+        """
         self.__queue.put((script, location, neighbours))
 
     def wait_threads(self):
+        """
+            Wait for all threads to finish their job.
+        """
         self.__queue.join()
 
     def stop_threads(self):
+        """
+            Send end command to every thread and wait them to finish.
+        """
         self.__queue.join()
 
         for thread in self.__threads:
@@ -70,7 +95,7 @@ class ThreadPool(object):
             thread.join()
 
 
-class ReusableBarrierCond():
+class ReusableBarrierCond(object):
     """ Bariera reentranta, implementata folosind o variabila conditie """
 
     def __init__(self, num_threads):
@@ -80,6 +105,9 @@ class ReusableBarrierCond():
         # protejeaza modificarea contorului
 
     def wait(self):
+        """
+            Wait for every thread to arrive to this point
+        """
         self.cond.acquire()  # intra in regiunea critica
         self.count_threads -= 1
         if self.count_threads == 0:

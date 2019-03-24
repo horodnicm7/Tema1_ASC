@@ -1,0 +1,57 @@
+In implementarea temei am folosit conceptul de thread pool, care pe scurt
+este reprezentat de un anumit numar de thread-uri si o coada cu task-uri,
+din care thread-urile isi "extrag sarcinile". Prin folosirea unui thread
+pool, ma asigur ca daca numarul de thread-uri este mai mic decat numarul
+de task-uri, acestea nu vor sta degeaba (ex: thread-ul 5 a terminat un task
+si acum este in stare idle), ci se exploateaza cat mai mult resursele
+alocate si atunci cand un thread isi termina treaba, va cauta un task in
+coada si in caz ca exista, il va incepe.
+In implementarea mea a clasei ThreadPool, am folosit 8 thread-uri (dupa
+cum a fost specificat in cerinta, pentru un procesor Snapdragon).
+
+                            Implementare
+                            ============
+Device
+------
+La crearea unui Device, acesta va crea si un DeviceThread, unde va avea loc
+logica principala a Device-ului. Pentru a forta device-urile sa fie in
+acelasi timepoint, am folosit o bariera reentranta din laborator, a carei
+unica instanta pe care o creez, o trimit tuturor device-urilor, profitand
+de faptul ca metoda setup_devices este apelata inainte de a incepe iteratiile
+propriu-zise. Astfel, device-ul cu id-ul 0, va crea o instanta pentru
+bariera si o va trimite celorlalte device-uri.
+Pentru a semnala terminarea unui timepoint si primirea unui script, am folosit
+instantele de Event din schelet, care initial au flag-ul intern setat pe false.
+Atunci cand primesc un script, verific daca este None si in caz afirmativ,
+setez flag-ul intern al event-ului timepoint_done, altfel il adaug impreuna cu
+locatia sa in lista cu scripturi care trebuie procesate si setez flag-ul
+intern al event-ului script_received pe true, semnaland astfel primirea unui
+script.
+
+DeviceThread
+------------
+In constructorul din DeviceThread, setez device-ul caruia ii apartine si
+creez o instanta de ThreadPool cu 8 thread-uri (by default) si device-ul
+curent, care va porni automat si thread-urile.
+Functia responsabile de thread-ul instantei de DeviceThread, contine o bucla
+care obtine vecinii curenti ai device-ului si in caz ca nu exista, atunci se
+va opri si fiecare iteratie corespunde unui timepoint. Apoi, pentru fiecare
+timepoint, daca a primit script-uri, atunci le va pune pe toate, alaturi de
+lista cu vecinii in coada cu task-uri din thread pool si reseteaza flag-ul
+intern al event-ului script_received (semnaleaza faptul ca asteapta noi
+script-uri). La finalul unui timepoint, folosesc bariera definita anterior,
+pentru a astepta toate device-urile sa ajunga la finalul acestuia.
+
+ThreadPool
+----------
+-Constructorul va initializa o coada de dimensiune maxima egala cu numarul de
+thread-uri si va porni thread-urile folosind functia work.
+-Functia work, contine o bucla care se opreste doar atunci cand in coada nu
+mai exista task-uri (am doar valori de None adaugate in functia stop_threads).
+In aceasta bucla, se va aduna datele vecinilor despre locatia curenta, se va
+rula script-ul daca vecinii au informatii despre locatia curenta si li se
+va trimite si lor informatia obtinuta in urma rularii. Apoi, se va actualiza
+valoarea device-ului curent despre locatia script-ului si se va marca task-ul
+curent ca fiind terminat.
+-Functia stop_threads va trimite valori de None in coada, pentru a forta
+thread-urile sa se opreasca si va apela join() pe ele.

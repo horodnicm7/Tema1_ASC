@@ -27,6 +27,10 @@ setez flag-ul intern al event-ului timepoint_done, altfel il adaug impreuna cu
 locatia sa in lista cu scripturi care trebuie procesate si setez flag-ul
 intern al event-ului script_received pe true, semnaland astfel primirea unui
 script.
+Pentru a fi sigur ca thread-urile folosesc tot timpul cele mai noi date despre
+o locatie si ca asteapta ca toate sa se actualizeze, am folosit un dictionar
+cu chei reprezentate de locatii si valori reprezentate de cate un lock pe
+locatia (cheia) respectiva.
 
 DeviceThread
 ------------

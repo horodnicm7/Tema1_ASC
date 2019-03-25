@@ -67,14 +67,15 @@ class ThreadPool(object):
                 self.__device.set_data(location, result)
             self.__queue.task_done()
 
-    def add_task(self, script, location, neighbours):
+    def add_tasks(self, scripts, neighbours):
         """
             Add task to be done.
         :param script: the script to be executed
         :param location: current device's location
         :param neighbours: device's neighbours
         """
-        self.__queue.put((script, location, neighbours))
+        for script, location in scripts:
+            self.__queue.put((script, location, neighbours))
 
     def wait_threads(self):
         """
@@ -157,6 +158,9 @@ class Device(object):
         self.thread = DeviceThread(self)
         self.thread.start()
         self.barrier = None
+        self.locks = dict()
+        for loc in sensor_data:
+            self.locks[loc] = Lock()
 
     def __str__(self):
         """
@@ -202,7 +206,11 @@ class Device(object):
         @rtype: Float
         @return: the pollution value
         """
-        return self.sensor_data[location] if location in self.sensor_data else None
+        if location in self.sensor_data:
+            self.locks[location].acquire()
+            return self.sensor_data[location]
+        else:
+            return None
 
     def set_data(self, location, data):
         """
@@ -214,6 +222,7 @@ class Device(object):
         """
         if location in self.sensor_data:
             self.sensor_data[location] = data
+            self.locks[location].release()
 
     def shutdown(self):
         """
@@ -249,9 +258,7 @@ class DeviceThread(Thread):
 
             while True:
                 if self.device.script_received.is_set():
-                    for script, location in self.device.scripts:
-                        self.pool.add_task(script, location, neighbours)
-
+                    self.pool.add_tasks(self.device.scripts, neighbours)
                     self.device.script_received.clear()
 
                 if self.device.timepoint_done.is_set():

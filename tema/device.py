@@ -96,9 +96,10 @@ class ThreadPool(object):
             thread.join()
 
 
-class ReusableBarrierSem():
-    """ Bariera reentranta, implementata folosind semafoare """
-     
+class ReusableBarrierSem(object):
+    """
+        Bariera reentranta, implementata folosind semafoare
+    """
     def __init__(self, num_threads):
         self.num_threads = num_threads
         self.count_threads1 = self.num_threads
@@ -106,29 +107,38 @@ class ReusableBarrierSem():
         self.counter_lock = Lock()               # protejam accesarea/modificarea contoarelor
         self.threads_sem1 = Semaphore(0)         # blocam thread-urile in prima etapa
         self.threads_sem2 = Semaphore(0)         # blocam thread-urile in a doua etapa
-     
+
     def wait(self):
+        """
+            Wait for threads
+        """
         self.phase1()
         self.phase2()
-     
+
     def phase1(self):
+        """
+            Phase1
+        """
         with self.counter_lock:
             self.count_threads1 -= 1
             if self.count_threads1 == 0:
-                for i in range(self.num_threads):
+                for _ in range(self.num_threads):
                     self.threads_sem1.release()
                 self.count_threads1 = self.num_threads
-         
+
         self.threads_sem1.acquire()
-     
+
     def phase2(self):
+        """
+            Phase2
+        """
         with self.counter_lock:
             self.count_threads2 -= 1
             if self.count_threads2 == 0:
-                for i in range(self.num_threads):
+                for _ in range(self.num_threads):
                     self.threads_sem2.release()
                 self.count_threads2 = self.num_threads
-         
+
         self.threads_sem2.acquire()
 
 
@@ -209,8 +219,8 @@ class Device(object):
         if location in self.sensor_data:
             self.locks[location].acquire()
             return self.sensor_data[location]
-        else:
-            return None
+
+        return None
 
     def set_data(self, location, data):
         """

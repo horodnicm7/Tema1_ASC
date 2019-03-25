@@ -6,7 +6,7 @@ Assignment 1
 March 2019
 """
 
-from threading import Event, Thread, Condition
+from threading import Event, Thread, Lock, Semaphore
 from Queue import Queue
 
 
@@ -95,27 +95,40 @@ class ThreadPool(object):
             thread.join()
 
 
-class ReusableBarrierCond(object):
-    """ Bariera reentranta, implementata folosind o variabila conditie """
-
+class ReusableBarrierSem():
+    """ Bariera reentranta, implementata folosind semafoare """
+     
     def __init__(self, num_threads):
         self.num_threads = num_threads
-        self.count_threads = self.num_threads
-        self.cond = Condition()  # blocheaza/deblocheaza thread-urile
-        # protejeaza modificarea contorului
-
+        self.count_threads1 = self.num_threads
+        self.count_threads2 = self.num_threads
+        self.counter_lock = Lock()               # protejam accesarea/modificarea contoarelor
+        self.threads_sem1 = Semaphore(0)         # blocam thread-urile in prima etapa
+        self.threads_sem2 = Semaphore(0)         # blocam thread-urile in a doua etapa
+     
     def wait(self):
-        """
-            Wait for every thread to arrive to this point
-        """
-        self.cond.acquire()  # intra in regiunea critica
-        self.count_threads -= 1
-        if self.count_threads == 0:
-            self.cond.notify_all()  # deblocheaza toate thread-urile
-            self.count_threads = self.num_threads
-        else:
-            self.cond.wait()  # blocheaza thread-ul eliberand in acelasi timp lock-ul
-        self.cond.release()  # iese din regiunea critica
+        self.phase1()
+        self.phase2()
+     
+    def phase1(self):
+        with self.counter_lock:
+            self.count_threads1 -= 1
+            if self.count_threads1 == 0:
+                for i in range(self.num_threads):
+                    self.threads_sem1.release()
+                self.count_threads1 = self.num_threads
+         
+        self.threads_sem1.acquire()
+     
+    def phase2(self):
+        with self.counter_lock:
+            self.count_threads2 -= 1
+            if self.count_threads2 == 0:
+                for i in range(self.num_threads):
+                    self.threads_sem2.release()
+                self.count_threads2 = self.num_threads
+         
+        self.threads_sem2.acquire()
 
 
 class Device(object):
@@ -161,7 +174,7 @@ class Device(object):
         """
         # we don't need no stinkin' setup
         if self.device_id == 0:
-            self.barrier = ReusableBarrierCond(len(devices))
+            self.barrier = ReusableBarrierSem(len(devices))
             for device in devices:
                 if device.device_id != 0:
                     device.barrier = self.barrier
